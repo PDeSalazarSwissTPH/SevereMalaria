@@ -1,7 +1,7 @@
 ### Reproducing plots, Figure 1 ###
 
 require(ggplot2)
-require(plot_grid)
+require(cowplot)
 reuire(tidyverse)
 
 ##load data##
