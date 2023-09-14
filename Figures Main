@@ -1,0 +1,102 @@
+### Reproducing plots, Figure 1 ###
+
+require(ggplot2)
+require(plot_grid)
+reuire(tidyverse)
+
+##load data##
+load(empirical_data_by_time_site.RdA)
+load(modeled_parasite_rate_by_site.RdA)
+
+##1a##
+
+rep_site_periods=c("Apac A_2017-18","Jinja B_2017-18","Mubende B_2017-18","Busia_2015-16" ) ##representative site-periods
+Fig1_a<-ggplot(empirical_data_by_time_site)+
+  geom_point(aes(x=PfPR,y=hosp_incidence),
+             size=2.8,fill="chocolate1",colour="grey10",shape=21,alpha=0.7)+
+  geom_point(data=subset(empirical_data_by_time_site,site_period %in% 
+                           rep_site_periods),
+             aes(x=PfPR,y=hosp_incidence,fill=site_period),
+             size=3.5,colour="grey10",shape=21,alpha=0.9)+
+  geom_text(data=subset(empirical_data_by_time_site,site_period %in% 
+                          sites),
+            aes(x=PfPR,y=hosp_incidence+2,label=site),
+            size=3.8,colour="black")+
+  labs(y="Malaria hospitalizations/1000 children 3m-9y",
+       x=bquote(paste(italic("mPf"),"PR")["2-10"]))+
+  scale_y_continuous(breaks=seq(0,50,10),limits=c(-2,52))+
+  scale_fill_manual(values=c("darkred","blue","purple","darkgreen"))+
+  xlim(0,0.70)+
+  theme_bw()
+##1b##
+rep_sites<-c("Apac A","Jinja B","Mubende B","Busia") #representative sites
+Fig_1b<-ggplot(subset(modeled_parasite_rate_by_site,
+                      Site%in%rep_sites))+
+  geom_line(aes(x=Year,y=mean_PfPR), colour="grey60",size=1)+
+  geom_point(aes(x=Year,y=mean_PfPR), shape=21, colour="grey50",fill="brown",size=1.5)+
+  scale_y_continuous(breaks=c(0.25,0.50,0.75),labels=c("25%","50%","75%"))+
+  labs(x="Year",
+       y=bquote(paste(italic("mPf"),"PR")["2-10"]))+
+  theme_bw()+
+  facet_wrap(vars(Site),ncol=2)
+
+##all sites, FigS1##
+Fig_S1<-ggplot(modeled_parasite_rate_by_site)+
+  geom_line(aes(x=Year,y=mean_PfPR), colour="grey60",size=1)+
+  geom_point(aes(x=Year,y=mean_PfPR), shape=21, colour="grey50",fill="brown",size=1.5)+
+  scale_y_continuous(breaks=c(0.25,0.50,0.75),labels=c("25%","50%","75%"))+
+  labs(x="Year",
+       y=bquote(paste(italic("mPf"),"PR")["2-10"]))+
+  theme_bw()+
+  facet_wrap(vars(Site),ncol=2)
+
+##Fig_1c##
+##compute median past PfPR per site_period and join data frames##
+
+change_pfpr<-full_join(modeled_parasite_rate_by_site,empirical_data_by_time_site[,c("site","first_year","last_year","site_period")],
+                       by=c("Site"="site"))
+change_pfpr$max_years_followup<-as.numeric(change_pfpr$first_year)-change_pfpr$Year
+
+change_pfpr<-subset(change_pfpr,max_years_followup>=0 &
+                      max_years_followup<=9)
+modeled_mean_past_prevalence <- change_pfpr%>%
+  group_by(site_period) %>%
+  summarise(mean_past_PfPR = mean(mean_PfPR),years_available=n())
+empirical_data_by_time_site<-left_join(empirical_data_by_time_site,modeled_mean_past_prevalence)
+empirical_data_by_time_site<-empirical_data_by_time_site[order(empirical_data_by_time_site$PfPR),]
+empirical_data_by_time_site$rank<-as.numeric(as.factor(order(empirical_data_by_time_site$PfPR)))
+empirical_data_by_time_site$group<-
+  ifelse(empirical_data_by_time_site$PfPR<=median(empirical_data_by_time_site$PfPR,na.rm=TRUE),
+         "higher than median past PfPR","lower than median past PfPR")
+##Plot Fig 1c##
+Fig_1c<-ggplot(subset(empirical_data_by_time_site,years_available>=7))+
+  geom_point(aes(x=mean_past_PfPR, y=rank,group=site_period,fill=as.factor(group)),
+              alpha=0.9,size=2.5,shape=21)+
+  geom_vline(aes(xintercept=median(empirical_data_by_time_site$PfPR,na.rm=TRUE)),linetype=1,
+             colour="red",
+             size=0.8,alpha=1)+
+  geom_point(aes(x=PfPR,y=rank),
+             size=3.5,colour="black",fill="chocolate1",shape=21,alpha=1)+
+  geom_curve(aes(x = mean_past_PfPR, y = rank, xend =PfPR, yend = rank), 
+            colour = "black", size=0.6,curvature = 0,linetype=1,
+           arrow = arrow(length = unit(0.02, "npc")))+
+  theme_classic()+
+  theme(
+    panel.background = element_rect(fill = NA),
+    panel.grid.major.x = element_line(colour = "grey40",linetype=3),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.ontop = TRUE,
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+    legend.title.align = 0.5,
+    legend.direction = "vertical",
+    legend.box.just = "center"
+  )+
+  scale_y_discrete(breaks=c(1:35),labels=c(empirical_data_by_time_site$site_period))+
+  scale_x_continuous(breaks=c(seq(0,0.7,0.05)),
+                     labels=paste0(seq(0,70,5),"%"),limits=c(-0.02,0.8))+
+  labs(y="Time sites",
+       x=bquote(paste(italic("Pf"),"PR")["2-10"]),
+       fill="")
+Fig_1c
