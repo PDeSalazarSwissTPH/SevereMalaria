@@ -2,9 +2,9 @@
 
 require(ggplot2)
 require(cowplot)
-reuire(tidyverse)
+reuire(dplyr)
 
-##load data##
+##load empirical hospitalization/PfPR data by site-period (Paton et al 2022, Science) and PfPR modeled data (Kamau et al 2022, BMJ)##
 load(empirical_data_by_time_site.RdA)
 load(modeled_parasite_rate_by_site.RdA)
 
@@ -100,3 +100,178 @@ Fig_1c<-ggplot(subset(empirical_data_by_time_site,years_available>=7))+
        x=bquote(paste(italic("Pf"),"PR")["2-10"]),
        fill="")
 Fig_1c
+
+### Reproducing plots, Figure 2 a, b, c(mock time-series), d ###
+#rm(list = ls())
+require(ggplot2)
+require(cowplot)
+require(tidyverse)
+require(MASS)
+require(doParallel)
+require(gnm)
+require(foreach)
+
+
+##load simulations data obtained from OpenMalaria, see Simulations_openMalaria ##
+load(historical_simulations.RdA) ##sample of historical simulations (n=50) from openMalaria, under steady state assumption
+load(contemporary_simulations_unsteady_state.RdA) ##sample of contemporary simulations (n=50) from openMalaria, under unsteady state assumption
+load(contemporary_simulations_steady_state.RdA) ##sample of contemporary simulations (n=50) from openMalaria, under unsteady state assumption
+hosp_rate<-0.9 # assumption hospitalization rate in the empirical contemporary database 90%
+
+#Fig_2a#
+
+#Fig_2b#
+
+## perform fitting to log-logistic function to contemporary data under setady state assumption
+
+df_fit_steady<-tibble(X=contemporary_simulations_steady_state$PfPR,
+                      Z=contemporary_simulations_steady_state$severe_incidence)
+plot(df_fit_steady$X,df_fit_steady$Z)
+
+mdl_steady <- nls(Z ~ SSlogis(X, a, b, xs),data = df_fit_steady)
+##fitting criteria
+AIC(mdl_steady)
+BIC(mdl_steady)
+
+##alternative fitting
+mdl_steady_alternative <- glm(Z ~ X, data = df_fit_steady, family=negative.binomial(theta=theta,link="log" ))
+##fitting criteria
+AIC(mdl_steady_alternative)
+BIC(mdl_steady_alternative)
+
+# function for bootstrap procedure
+# inspired by De Salazar et al 2020 (EID)
+
+boot_pi_nls_nb <- function(model, data,pdata, n, p) {
+  odata <- data 
+  lp <- (1 - p) / 2
+  up <- 1 - lp
+  set.seed(2022)
+  seeds <- round(runif(n, 1, 1000), 3)
+  boot_y <- foreach(i = 1:n, .combine = rbind) %dopar% {
+    set.seed(as.integer(seeds[i]))
+    bdata <- odata[sample(seq(nrow(odata), size = nrow(odata), replace = TRUE)), ]
+    update(model, data = bdata)
+    bpred <- predict(model, type = "response", newdata = pdata)
+    rnbinom(n=length(bpred), mu = as.numeric(bpred), size=0.95*bpred/0.05)
+  }
+  boot_ci <- t(apply(boot_y, 2, quantile, c(lp, up)))
+  return(data.frame(pred = predict(model, newdata = pdata, type = "response"), 
+                    lower = boot_ci[, 1], upper = boot_ci[, 2]))
+}
+
+new_data_steady <- df_fit_steady
+
+## computing prediction intervals
+PI<-boot_pi_nls_nb(mdl_steady, df_fit_steady,new_data_steady, 1000, 0.95)
+PI_iq<-boot_pi_nls_nb(mdl_steady,df_fit_steady ,new_data_steady, 1000, 0.5)
+
+df_loglinear_model<-tibble(predictor=new_data_steady$X,
+                          fit=PI$pred,
+                          lwr=PI$lower,upr=PI$upper,
+                          lwr_sm=fitted(loess(PI$lower~X,data=new_data_steady)), #smoothed
+                          upr_sm=fitted(loess(PI$upper~X,data=new_data_steady)), #smoothed PI
+                          lwr_iq=PI_iq$lower,
+                          upr_iq=PI_iq$lower,
+                          lwr_sm_iq=fitted(loess(PI_iq$lower~X,data=new_data_steady)), #smoothed PI interquantile
+                          upr_sm_iq=fitted(loess(PI_iq$upper~X,data=new_data_steady)), #smoothed PI interquantile
+)
+
+Fig_2b<-ggplot()+
+  geom_point(data=df_fit_steady, aes(x=X,y=Z),size=2,shape=21,color="grey20",fill="grey80",alpha=0.6)+
+  geom_ribbon(data=df_loglinear_model,aes(x=predictor,ymin=lwr_sm,ymax=upr_sm),
+              size=0.6,colour="grey20" ,fill="lightblue",alpha=0.2)+
+  geom_ribbon(data=df_loglinear_model,aes(x=predictor,ymin=lwr_sm_iq,ymax=upr_sm_iq),
+              size=0.6, colour="grey20" ,fill="lightblue",alpha=0.3)+
+  geom_line(data=df_loglinear_model,aes(x=predictor,y=fit),size=1, colour="black")+ 
+  geom_point(data=empirical_data_by_time_site,
+             aes(x=PfPR,y=hosp_incidence/hosp_rate),
+             size=3.2,fill="chocolate1",colour="grey10",shape=21,alpha=0.7)+
+  labs(y="Hospitalizations/1000 children 3m-9y",
+       x=bquote(paste(italic("Pf"),"PR")["2-10"]))+
+  ylim(c(-1,50))+
+  xlim(0.01,0.70)+
+  theme_bw()
+
+Fig_2b
+
+###Fig_2c###
+
+###Fig_2d###
+
+## perform fitting to log-linear function to contemporary data under unsetady state assumption
+
+df_fit_unsteady<-tibble(X=contemporary_simulations_unsteady_state$PfPR,
+               Z=contemporary_simulations_unsteady_state$severe_incidence)
+infered_theta<-glm.nb(Z~.,data=df_fit,link="log") # estimate theta for glm model
+plot(df_fit_unsteady$X,df_fit_unsteady$Z)
+lines(X,fitted(infered_theta))
+theta<-infered_theta$theta
+
+mdl_unsteady <- glm(Z ~ X, data = df_fit_unsteady, family=negative.binomial(theta=theta,link="log"))
+##fitting criteria
+AIC(mdl_unsteady)
+BIC(mdl_unsteady)
+
+##alternative fitting
+  mdl_unsteady_alternative <- glm(Z ~ X, data = df_fit_unsteady, family=negative.binomial(theta=theta,link="log" ) )
+  ##fitting criteria
+AIC(mdl_unsteady_alternative)
+BIC(mdl_unsteady_alternative)
+
+# function for bootstrap procedure
+# inspired by De Salazar et al 2020 (EID)
+
+boot_pi_nb <- function(model, pdata, n, p) {
+  odata <- model$data
+  lp <- (1 - p) / 2
+  up <- 1 - lp
+  set.seed(2020)
+  seeds <- round(runif(n, 1, 1000), 3)
+  boot_y <- foreach(i = 1:n, .combine = rbind) %dopar% {
+    set.seed(seeds[i])
+    bdata <- odata[sample(seq(nrow(odata)), size = nrow(odata), replace = TRUE), ]
+    bpred <- predict(update(model, data = bdata), type = "response", newdata = pdata)
+    rnegbin(length(bpred), mu = bpred,theta=theta)
+  }
+  boot_ci <- t(apply(boot_y, 2, quantile, c(lp, up)))
+  return(data.frame(pred = predict(model, newdata = pdata, type = "response"), lower = boot_ci[, 1], upper = boot_ci[, 2]))
+}
+
+## computing prediction intervals
+PI<-boot_pi_nb(mdl_unsteady, new_data_unsteady, 1000, 0.95)
+PI_iq<-boot_pi_nb(mdl_unsteady, new_data_unsteady, 1000, 0.5)
+
+df_loglogic_model<-tibble(predictor=new_data_unsteady$X,
+                          fit=PI$pred,
+                          lwr=PI$lower,upr=PI$upper,
+                          lwr_sm=fitted(loess(PI$lower~X,data=new_data_unsteady)), #smoothed
+                          upr_sm=fitted(loess(PI$upper~X,data=new_data_unsteady)), #smoothed PI
+                          lwr_iq=PI_iq$lower,upr_iq=PI_iq$upper,
+                          uprr_iq=PI_iq$lower,upr_iq=PI_iq$upper,
+                          lwr_sm_iq=fitted(loess(PI_iq$lower~X,data=new_data_unsteady)), #smoothed PI interquantile
+                          upr_sm_iq=fitted(loess(PI_iq$upper~X,data=new_data_unsteady)), #smoothed PI interquantile
+)
+
+
+
+Fig_2d<-ggplot()+
+  geom_point(data=df_fit_unsteady, aes(x=X,y=Z),size=2,shape=21,color="grey20",fill="grey80",alpha=0.6)+
+  geom_ribbon(data=df_loglogic_model,aes(x=predictor,ymin=lwr_sm,ymax=upr_sm),
+              size=0.6,colour="grey20" ,fill="lightblue",alpha=0.2)+
+  geom_ribbon(data=df_loglogic_model,aes(x=predictor,ymin=lwr_sm_iq,ymax=upr_sm_iq),
+              size=0.6, colour="grey20" ,fill="lightblue",alpha=0.3)+
+  geom_line(data=df_loglogic_model,aes(x=predictor,y=fit),size=1, colour="black")+ 
+  geom_point(data=empirical_data_by_time_site,
+             aes(x=PfPR,y=hosp_incidence/hosp_rate),
+             size=3.2,fill="chocolate1",colour="grey10",shape=21,alpha=0.7)+
+  labs(y="Hospitalizations/1000 children 3m-9y",
+       x=bquote(paste(italic("Pf"),"PR")["2-10"]))+
+  ylim(c(-1,50))+
+  xlim(0.01,0.70)+
+  theme_bw()
+
+Fig_2d
+
+
+
